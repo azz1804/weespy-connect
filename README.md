@@ -18,13 +18,15 @@ Colle tes comptes, un par ligne. **Laisse le champ IP vide si des places sont d�
 
 WeeSpy attribue automatiquement une **IP déjà disponible pour le réseau concerné** à chaque nouveau compte. Si tu fournis des IP supplémentaires, seules celles qui manquent sont ajoutées ; les autres sont indiquées comme non ajoutées dans le récapitulatif. Les comptes déjà présents conservent leur affectation. Une IP peut accueillir un compte de chaque réseau, dans la limite de 25 comptes par réseau.
 
-### 3. Lance et suis les connexions
+### 3. Vérifie et connecte en un clic
 
-Au récapitulatif, chaque IP est réellement contrôlée depuis le VPS :
+Clique sur **Vérifier et connecter**. Chaque IP est réellement contrôlée depuis le VPS :
 
 **En attente → Vérification… → IP validée ou erreur**
 
-Une fois les IP validées, clique sur **Lancer les connexions**. L’application ouvre Firefox sur le VPS, renseigne les formulaires reconnus et sauvegarde les sessions sur ce serveur.
+Une fois les IP validées, l’application ouvre automatiquement Firefox sur le VPS, renseigne les formulaires reconnus et sauvegarde les sessions sur ce serveur. Le contrôle IP ne valide pas encore le mot de passe : la ligne du compte affiche ensuite le résultat réel de la connexion.
+
+Seuls les comptes saisis sont traités par défaut. L’option d’inclure les comptes en attente concerne uniquement les réseaux saisis, pour éviter de lancer Instagram pendant un import X.
 
 Si un CAPTCHA ou une validation manuelle apparaît, la ligne du compte indique quoi faire. Tu peux ouvrir l’écran du Firefox distant, terminer l’étape, puis cliquer sur **Reprendre**.
 

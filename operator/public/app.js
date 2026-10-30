@@ -37,7 +37,7 @@ function disable() {
   $('connect-pending').disabled = busy || !!state?.discoveryWarnings?.length; $('stop').disabled = pending;
   $('setup-next').disabled = busy || (step === 3 && (!review?.accounts.length || !reviewIPsReady()));
   $('retry-ips').disabled = busy || !review || reviewChecks().some(r => ['queued', 'checking'].includes(r.state));
-  $('setup-back').disabled = pending; $('setup-cancel').disabled = pending;
+  $('setup-back').disabled = busy; $('setup-cancel').disabled = pending; $('setup-next').hidden = step === 3;
   document.querySelectorAll('[data-connect]').forEach(button => button.disabled = busy || !!state?.discoveryWarnings?.length);
   document.querySelectorAll('[data-action], [data-view]').forEach(button => button.disabled = pending);
 }
@@ -129,7 +129,8 @@ function render() {
   if (lastShownMessage !== state.message) { lastShownMessage = state.message; notice(state.busy || /^Comptes chargés/.test(state.message) ? '' : state.message); }
   $('summary').textContent = `${selected.length} compte${selected.length > 1 ? 's' : ''}${dashboardNetwork === 'all' ? '' : ' ' + networks[dashboardNetwork]} · ${new Set(selected.map(a => a.ip).filter(Boolean)).size} IP · ${selected.filter(stored).length} session${selected.filter(stored).length > 1 ? 's' : ''} sur le VPS`;
   $('last-check').textContent = state.vps?.checkedAt ? `VPS contrôlé à ${time(state.vps.checkedAt)} · suivi automatique` : 'Contrôle du VPS en cours…';
-  renderHome(); renderRows(); if (review && step === 3) renderIPChecks(); updateSetupContext(); disable();
+  if (review && state.setupRun?.previewId === review.previewId && ['connecting', 'finished'].includes(state.setupRun.state)) { review = null; clearDraft(); view = 'accounts'; showView('accounts'); }
+  renderHome(); renderRows(); if (review && step === 3) { renderIPChecks(); if (state.setupRun?.previewId === review.previewId && state.setupRun.state === 'error') { $('setup-error').textContent = state.setupRun.message; $('setup-error').hidden = false; } } updateSetupContext(); disable();
 }
 function showAccessError(error) { accessFailed = true; notice(accessErrorMessage(error), true); }
 async function refresh() {
@@ -144,7 +145,7 @@ function showView(next, focus = true) {
   if (focus) { $(next === 'home' ? 'home-title' : next === 'accounts' ? 'accounts-title' : 'setup-title').focus({ preventScroll: true }); window.scrollTo({ top: 0 }); }
   disable();
 }
-function cancelChecks() { const runId = state?.ipChecks?.runId; if (runId) api('setup-cancel-checks', { runId }).catch(() => {}); }
+function cancelChecks() { const runId = state?.ipChecks?.runId; if (runId && state?.setupRun?.state !== 'checking') api('setup-cancel-checks', { runId }).catch(() => {}); }
 function clearDraft() {
   if (review) cancelChecks();
   for (const id of ['setup-proxies', 'setup-linkedin', 'setup-x', 'setup-instagram']) $(id).value = '';
@@ -167,11 +168,12 @@ function renderHome() {
   $('home-server-state').className = 'state ' + (state.vps.state === 'ok' ? 'saved' : state.vps.state === 'error' ? 'error' : 'ready');
   $('home-start').textContent = !state.loaded || !state.accounts.length ? 'Commencer la configuration →' : remaining ? 'Tout connecter →' : 'Ajouter des comptes →';
   $('home-total').textContent = `${state.accounts.length} compte${state.accounts.length > 1 ? 's' : ''} au total`;
-  const running = state.busy && !!(state.active || state.queue.length);
+  const checkingIPs = state.setupRun?.state === 'checking';
+  const running = state.busy && !!(state.active || state.queue.length || checkingIPs);
   $('activity').hidden = !running;
   const active = state.accounts.find(a => a.key === state.active);
-  $('activity-title').textContent = state.actions.length ? 'Une étape attend ton intervention' : 'Tes connexions avancent';
-  $('activity-message').textContent = active ? `${active.label} · ${active.message} · ${state.queue.length} en attente` : 'Préparation de la file sur le VPS…';
+  $('activity-title').textContent = checkingIPs ? 'Contrôle des IP avant connexion' : state.actions.length ? 'Une étape attend ton intervention' : 'Tes connexions avancent';
+  $('activity-message').textContent = checkingIPs ? `${(state.ipChecks?.rows || []).filter(r => r.state === 'ok').length} / ${state.ipChecks?.rows.length || 0} IP validées · ${state.setupRun.count} comptes à connecter automatiquement` : active ? `${active.label} · ${active.message} · ${state.queue.length} en attente` : 'Préparation de la file sur le VPS…';
   const counts = Object.keys(networks).map(key => ({ key, total: state.accounts.filter(a => a.network === key).length, saved: state.accounts.filter(a => a.network === key && stored(a)).length }));
   const signature = JSON.stringify(counts);
   if (signature !== networkSignature) {
@@ -193,16 +195,17 @@ function targetMatches() {
 }
 function updateSetupContext() {
   if (!state) return;
-  const count = state.accounts.filter(connectable).length;
+  const enteredNetworks = Object.keys(networks).filter(key => $('setup-' + key).value.trim());
+  const count = state.accounts.filter(a => connectable(a) && enteredNetworks.includes(a.network)).length;
   $('pending-number').textContent = count; $('pending-option').hidden = !count;
   $('setup-stock').textContent = `${state.proxies.length} déjà enregistrée${state.proxies.length > 1 ? 's' : ''}`;
   const free = state.proxies.filter(p => p.availableNetworks?.includes(network)).length;
   $('setup-capacity').textContent = `${free} place${free > 1 ? 's' : ''} libre${free > 1 ? 's' : ''} pour ${networks[network]} avec les IP actuelles. Elles seront attribuées automatiquement ; tu peux laisser le champ IP vide. Une IP peut accueillir un compte de chaque réseau.`;
-  if (state.accounts.some(a => a.network === network && a.source && a.identityKnown === false)) $('setup-capacity').textContent += ' Les sessions existantes de ce réseau doivent être identifiées avant de lancer de nouvelles connexions.';
+  if (state.accounts.some(a => a.network === network && a.source && a.identityKnown === false && !a.ip)) $('setup-capacity').textContent += ' Les sessions existantes de ce réseau doivent être identifiées avant de lancer de nouvelles connexions.';
   $('setup-server-status').hidden = !targetMatches();
   $('setup-server-status').textContent = `VPS accessible · ${state.accounts.length} comptes et ${state.proxies.length} IP retrouvés. Tu peux continuer.`;
   if (step === 1) $('setup-next').textContent = pending ? 'Vérification…' : targetMatches() ? 'Continuer →' : 'Vérifier le VPS →';
-  else if (step === 2) $('setup-next').textContent = pending ? 'Vérification des accès…' : 'Voir le récapitulatif →';
+  else if (step === 2) $('setup-next').textContent = pending ? 'Vérification des accès…' : 'Vérifier et connecter →';
   else $('setup-next').textContent = pending ? 'Lancement…' : `Lancer ${review?.accounts.length || 0} connexion${review?.accounts.length > 1 ? 's' : ''} →`;
 }
 function setStep(next) {
@@ -213,22 +216,23 @@ function setStep(next) {
     if (i === next) item.setAttribute('aria-current', 'step'); else item.removeAttribute('aria-current');
   }
   $('setup-back').hidden = next === 1; $('setup-step-label').textContent = `Étape ${next} sur 3`;
-  $('setup-next').textContent = next === 2 ? 'Voir le récapitulatif →' : next === 3 ? `Lancer ${review?.accounts.length || 0} connexion${review?.accounts.length > 1 ? 's' : ''} →` : 'Continuer →';
+  $('setup-next').textContent = next === 2 ? 'Vérifier et connecter →' : next === 3 ? `Lancer ${review?.accounts.length || 0} connexion${review?.accounts.length > 1 ? 's' : ''} →` : 'Continuer →';
   updateSetupContext(); disable();
   const heading = $('step-' + next).querySelector('h2'); heading.tabIndex = -1; heading.focus({ preventScroll: true }); window.scrollTo({ top: 0 });
 }
 function openSetup() {
   clearDraft(); const target = state?.connection || { host: 'mon-vps' };
   $('setup-host').value = target.host; $('setup-port').value = target.port || ''; $('setup-identity').value = target.identity || '';
-  $('include-pending').checked = true; selectNetwork('linkedin'); showView('setup', false); setStep(1);
+  $('include-pending').checked = false; selectNetwork('linkedin'); showView('setup', false); setStep(1);
 }
 ['home-start', 'home-server-edit', 'add-open', 'empty-add'].forEach(id => $(id).addEventListener('click', openSetup));
-$('setup-cancel').addEventListener('click', () => navigate('home'));
+$('setup-cancel').addEventListener('click', () => { if (state?.setupRun?.state === 'checking') api('action', { action: 'stop' }).catch(showAccessError); navigate('home'); });
 $('setup-back').addEventListener('click', () => { cancelChecks(); review = null; setStep(step - 1); });
 ['setup-host', 'setup-port', 'setup-identity'].forEach(id => $(id).addEventListener('input', updateSetupContext));
 function setupData() { return { proxies: $('setup-proxies').value, accounts: Object.fromEntries(Object.keys(networks).map(key => [key, $('setup-' + key).value])), includePending: $('include-pending').checked }; }
 function updateEntryCounts() {
   for (const key of Object.keys(networks)) $('input-count-' + key).textContent = $('setup-' + key).value.trim().split(/\s+/).filter(Boolean).length;
+  updateSetupContext();
 }
 function selectNetwork(key) {
   network = key;
@@ -252,7 +256,7 @@ function renderReview() {
   $('review-target').textContent = review.target === 'mon-vps' ? 'VPS' : review.target;
   $('review-count').textContent = review.accounts.length; $('review-ips').textContent = review.totalIPs;
   $('review-title').textContent = review.accounts.length ? 'Vérifions les IP avant de démarrer.' : 'Aucun compte à connecter.';
-  $('review-intro').textContent = review.accounts.length ? 'Chaque IP est testée depuis le VPS. Le lancement sera disponible lorsque tous les contrôles auront réussi.' : 'Consulte les sessions existantes et les affectations à vérifier dans le tableau, ou ajoute des comptes à l’étape précédente.';
+  $('review-intro').textContent = review.accounts.length ? 'Chaque IP est testée depuis le VPS. Dès que tous les contrôles réussissent, les comptes sont connectés automatiquement. Les identifiants seront vérifiés lors de la connexion au réseau.' : 'Consulte les sessions existantes et les affectations à vérifier dans le tableau, ou ajoute des comptes à l’étape précédente.';
   $('review-note').textContent = `${review.newAccounts} nouveau(x) compte(s) · ${review.reusedIPs} IP existante(s) réutilisée(s) · ${review.newIPs} nouvelle(s) IP · ${review.unusedIPs} IP supplémentaire(s) non ajoutée(s) · ${review.skipped} compte(s) ignoré(s) : session déjà présente ou affectation à vérifier.`;
   const rows = document.createDocumentFragment();
   for (const account of review.accounts) { const tr = element('tr'); tr.append(element('td', account.label), element('td', networks[account.network]), element('td', account.ip)); rows.append(tr); }
@@ -279,9 +283,9 @@ function renderIPChecks() {
     list.append(item);
   }
   $('ip-check-list').replaceChildren(list);
-  if (review.accounts.length) $('review-title').textContent = reviewIPsReady() ? 'Les IP sont prêtes.' : failed ? 'Des IP demandent une correction.' : 'Vérifions les IP avant de démarrer.';
+  if (review.accounts.length) $('review-title').textContent = reviewIPsReady() ? 'IP validées · lancement des connexions…' : failed ? 'Des IP demandent une correction.' : 'Vérifions les IP avant de démarrer.';
 }
-$('retry-ips').addEventListener('click', () => act(async () => { state = await api('setup-check-ips', { ...setupData(), previewId: review.previewId }); renderIPChecks(); }, 'setup-error'));
+$('retry-ips').addEventListener('click', () => act(async () => { state = await api('setup-auto', { ...setupData(), previewId: review.previewId }); renderIPChecks(); }, 'setup-error'));
 function cookieProof(account) {
   const panel = element('div', undefined, 'cookie-proof');
   const evidence = account.cookieEvidence;
@@ -306,7 +310,7 @@ $('setup-form').addEventListener('submit', event => {
       setStep(2);
     } else if (step === 2) {
       review = await api('setup-preview', setupData()); renderReview(); setStep(3);
-      state = await api('setup-check-ips', { ...setupData(), previewId: review.previewId }); renderIPChecks();
+      state = await api('setup-auto', { ...setupData(), previewId: review.previewId }); renderIPChecks();
     } else {
       await api('setup-connect', { ...setupData(), previewId: review.previewId });
       clearDraft(); openAccounts();
@@ -338,6 +342,6 @@ document.querySelectorAll('[data-dashboard-network]').forEach(button => button.a
   if (state) render();
 }));
 ['claude', 'codex'].forEach(provider => $(provider).addEventListener('click', () => act(async () => { const result = await api('install', { provider }); $('assistant-message').textContent = result.message + ' Si nécessaire : ' + result.login; }, 'settings-error')));
-window.addEventListener('pagehide', clearDraft);
+window.addEventListener('pagehide', () => { review = null; clearDraft(); });
 refresh().catch(showAccessError);
 setInterval(() => { if (!pending) refresh().catch(showAccessError); }, 2000);

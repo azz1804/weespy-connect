@@ -68,7 +68,8 @@ export async function createServer({ operator = new Operator(), token = randomBy
         case '/api/import-connect': return json(200, operator.importAndConnect(data));
         case '/api/setup-preview': return json(200, operator.previewSetup(data));
         case '/api/setup-check-ips': return json(200, operator.checkSetupIPs(data));
-        case '/api/setup-cancel-checks': if (data.runId && data.runId === operator.ipChecks?.runId) operator.cancelIPChecks(); return json(200, operator.snapshot());
+        case '/api/setup-cancel-checks': if (operator.setupRun?.state !== 'checking' && data.runId && data.runId === operator.ipChecks?.runId) operator.cancelIPChecks(); return json(200, operator.snapshot());
+        case '/api/setup-auto': return json(200, operator.autoConnectSetup(data));
         case '/api/setup-connect': return json(200, operator.setupAndConnect(data));
         case '/api/start': return json(200, operator.start(data.keys));
         case '/api/action': return json(200, operator.action(data.action, { key: data.key }));

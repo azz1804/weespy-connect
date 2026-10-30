@@ -24,7 +24,7 @@ export class Operator {
     data.proxies = data.proxies.map(proxy => ({ ...proxy, availableNetworks: ['linkedin', 'x', 'instagram'].filter(network => !proxy.reservedNetworks.includes(network) && !this.inventory.accounts.some(a => a.network === network && this.inventory.proxies[a.index - 1].ip === proxy.ip)) }));
     if (agent) data.accounts = data.accounts.map(({ label, ...rest }) => rest);
     return { ...data, execution: 'vps', ...(!agent ? {browserUrl:this.browserUrl||null} : {}), target: this.target?.host ?? null, ...(!agent ? { connection: this.target } : {}), busy: this.busy, active: this.active, queue: this.queue,
-      actions: this.pending?.actions || [], message: this.message, loaded: !!this.remote, vps: this.vps, checkingHealth: !!this.healthJob, ipChecks: this.ipChecks || null, discoveryWarnings: this.discovery.warnings };
+      actions: this.pending?.actions || [], message: this.message, loaded: !!this.remote, vps: this.vps, checkingHealth: !!this.healthJob, ipChecks: this.ipChecks || null, setupRun: this.setupRun || null, discoveryWarnings: this.discovery.warnings };
   }
   availableKeys(inventory = this.inventory) { return new Set(existingView(publicInventory(inventory, this.statuses).accounts, this.discovery).filter(a => !a.readOnly).map(a => a.key)); }
   existingLabels(network) { return this.discovery.accounts.filter(a => a.network === network && a.identityKnown).map(a => a.label); }
@@ -124,7 +124,12 @@ export class Operator {
     }
     if (!hasAccounts) next = mergeImport(next, { proxies: data.proxies, network: 'linkedin', accounts: '' });
     const available = this.availableKeys(next);
-    const keys = rowsOf(next).filter(r => available.has(r.key) && !storedStates.has(this.statuses.get(r.key)?.state) && (data.includePending || requested.has(`${r.network}:${identity(r.network, r.record)}`))).map(r => r.key);
+    const requestedNetworks = new Set([...requested].map(person => person.split(':')[0]));
+    const selected = r => requested.has(`${r.network}:${identity(r.network, r.record)}`) || (data.includePending && (!requestedNetworks.size || requestedNetworks.has(r.network)));
+    const publicView = existingView(publicInventory(next, this.statuses).accounts, this.discovery);
+    const blocked = rowsOf(next).filter(r => selected(r) && publicView.some(a => a.key === r.key && ['unavailable', 'conflict'].includes(a.state)));
+    if (blocked.length) fail(`${blocked.length} compte(s) ${[...new Set(blocked.map(r => names[r.network]))].join(', ')} bloqué(s) : ${publicView.find(a => a.key === blocked[0].key).message} Aucun contrôle IP ni connexion n’a été lancé.`);
+    const keys = rowsOf(next).filter(r => available.has(r.key) && !storedStates.has(this.statuses.get(r.key)?.state) && selected(r)).map(r => r.key);
     // Bind the review to this server, its inventory and the exact connection selection.
     const previewId = digest(JSON.stringify([this.target, this.inventory, next, keys, data.proxies, data.accounts, data.includePending]));
     const publicRows = publicInventory(next, this.statuses).accounts;
@@ -161,6 +166,32 @@ export class Operator {
           checks.rows[i] = { ip: proxy.ip, state: 'error', checkedAt: this.now(), message: error.category === 'vps' ? 'VPS inaccessible. Vérifie l’accès SSH.' : error.category === 'ip' ? 'La sortie ne correspond pas à cette IP.' : 'Contrôle impossible : accès proxy ou service de vérification indisponible.' };
         }
       }
+    })();
+    return this.snapshot();
+  }
+  autoConnectSetup(data) {
+    const { preview } = this.prepareSetup(data);
+    if (data.previewId !== preview.previewId) fail('La configuration a changé. Reviens au récapitulatif.');
+    if (!preview.accounts.length) fail('Aucun nouveau compte à connecter dans cette sélection.');
+    this.checkSetupIPs(data);
+    const checks = this.ipChecks, signal = this.ipCheckController.signal;
+    const run = { previewId: preview.previewId, state: 'checking', count: preview.accounts.length };
+    this.setupRun = run; this.busy = true;
+    this.message = 'Vérification des IP ; les comptes sélectionnés seront connectés automatiquement ensuite.';
+    this.setupJob = (async () => {
+      try {
+        await this.ipCheckJob;
+        if (signal.aborted || this.closed || this.ipChecks !== checks) { run.state = 'stopped'; this.message = 'Connexion annulée avant le lancement.'; return; }
+        if (checks.rows.some(r => r.state !== 'ok')) fail('Une IP n’a pas pu être validée. Corrige la ligne en erreur puis réessaie ; aucun compte n’a été connecté.');
+        // No await between unlocking and starting: the validated draft is consumed once.
+        this.busy = false;
+        this.setupAndConnect(data);
+        run.state = 'connecting';
+        await this.job;
+        run.state = 'finished';
+      } catch (error) {
+        run.state = 'error'; run.message = safeError(error); this.message = run.message;
+      } finally { if (run.state !== 'connecting') this.busy = false; }
     })();
     return this.snapshot();
   }
@@ -239,7 +270,7 @@ export class Operator {
     });
   }
   action(action, { agent = false, key } = {}) {
-    if (action === 'stop') { this.controller?.abort(); this.message = 'Arrêt et fermeture du navigateur…'; return this.snapshot({ agent }); }
+    if (action === 'stop') { if (this.setupRun?.state === 'checking') this.cancelIPChecks(); this.controller?.abort(); this.message = 'Arrêt et fermeture du navigateur…'; return this.snapshot({ agent }); }
     if (key && key !== this.active) fail('Ce compte n’est plus celui qui attend une intervention.');
     if (agent && action === 'confirm') fail('La confirmation d’identité doit être faite dans l’application par le propriétaire.');
     if (!this.pending?.actions.includes(action)) fail('Cette action n’est pas disponible maintenant.');
@@ -275,7 +306,7 @@ export class Operator {
     this.monitor = setInterval(() => { this.refreshHealth({ proxies: ++tick % 5 === 0 }); }, interval); this.monitor.unref?.();
   }
   async close() {
-    this.closed = true; this.cancelIPChecks(); await this.ipCheckJob; clearInterval(this.monitor); this.controller?.abort(); this.healthController.abort(); await this.job; await this.healthJob;
+    this.closed = true; this.cancelIPChecks(); this.controller?.abort(); await this.ipCheckJob; await this.setupJob; clearInterval(this.monitor); this.controller?.abort(); this.healthController.abort(); await this.job; await this.healthJob;
     this.inventory = { version: 1, proxies: [], accounts: [] }; this.discovery = { accounts: [], warnings: [] }; this.remote = null;
   }
 }

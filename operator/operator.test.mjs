@@ -359,7 +359,7 @@ test('guided setup validates the whole batch before changing any assignment', as
 });
 test('review expires when its server, inputs, inventory or selection changes', async () => {
   const operator = new Operator({ remote: () => fakeRemote() }); await operator.load({ host: 'fake-vps' });
-  const data = { proxies: '', accounts: { x: 'x-person:p' }, includePending: true };
+  const data = { proxies: '', accounts: { x: 'x-person:p', linkedin: input }, includePending: true };
   const previewId = operator.previewSetup(data).previewId;
   assert.throws(() => operator.setupAndConnect({ ...data, previewId: 'unreviewed' }), /configuration a changé/);
   assert.throws(() => operator.setupAndConnect({ ...data, accounts: { x: 'other:p' }, previewId }), /configuration a changé/);

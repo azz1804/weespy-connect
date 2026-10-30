@@ -169,3 +169,36 @@ test('Firefox cookie evidence reads the bound export and strips all values befor
     await rm(path); const missing=f.read().accounts[0]; assert.equal(missing.cookieEvidence,null); assert.equal(missing.state,'missing'); assert.equal(missing.detail,'session_export_failed');
   } finally { await f.close(); }
 });
+
+test('unknown profiles with verified service IPs reserve only those IPs, without blocking unrelated accounts',()=>{
+ const inv=mergeImport(inventory(),{network:'x',accounts:'new_profile:fake'});
+ const rows=existingView(publicInventory(inv).accounts,discovery([external({source:'x-worker',network:'x',id:'opaque',label:'opaque',identityKnown:false,ip:'203.0.113.2'})]));
+ assert.equal(rows.find(a=>a.key==='x1').readOnly,undefined);
+ assert.equal(rows.find(a=>a.external).ip,'203.0.113.2');
+ const conflict=existingView(publicInventory(inv).accounts,discovery([external({source:'x-worker',network:'x',id:'opaque',label:'opaque',identityKnown:false,ip:'203.0.113.1'})]));
+ assert.equal(conflict.find(a=>a.key==='x1').state,'conflict');
+});
+test('worker routing metadata is read without exposing proxy or cookie secrets',async()=>{
+ const f=await fixture();
+ try{
+  await writeFile(f.paths['x-worker'],JSON.stringify({opaque:{cookie_header:`auth_token=${secret}; ct0=${secret}`,ct0:secret}}));
+  let script=REMOTE;
+  for(const [key,path] of Object.entries(sourcePaths))script=script.replaceAll("'"+path+"'",JSON.stringify(f.paths[key]));
+  script=script.slice(0,script.indexOf('req=json.load(sys.stdin)'))+"\nexisting_x_routes=lambda ids: {'opaque':{'alias':'p1','ip':'203.0.113.2'}}\nprint(json.dumps(existing_sessions()))";
+  const result=spawnSync('/usr/bin/python3',['-c',script],{encoding:'utf8'});
+  assert.equal(result.status,0,result.stderr);assert.ok(!result.stdout.includes(secret));
+  const data=JSON.parse(result.stdout);assert.equal(data.accounts[0].ip,'203.0.113.2');assert.equal(data.accounts[0].identityKnown,false);
+ }finally{await f.close();}
+});
+
+test('explicit worker routes require matching mounts and unanimous IP assignments',async()=>{
+ const f=await fixture();
+ try{
+  await writeFile(f.paths.proxies,JSON.stringify({p1:`http://u:${secret}@203.0.113.1:12323`,p2:`http://u:${secret}@203.0.113.2:12323`}));
+  let script=REMOTE.slice(0,REMOTE.indexOf('req=json.load(sys.stdin)'));
+  for(const [key,path] of Object.entries(sourcePaths))script=script.replaceAll("'"+path+"'",JSON.stringify(f.paths[key]));
+  script+=`\nimport subprocess\nkey='x-session:'+hashlib.sha256(b'x-session-proxy\\0default\\0opaque').hexdigest()\ndef container(alias):\n return {'Mounts':[{'Source':existing_paths['x-worker'],'Destination':'/run/secrets/x-managed-accounts.json'}],'Config':{'Env':['WEESPY_DEDICATED_PROXY_ASSIGNMENTS='+json.dumps({key:alias})]}}\ncontainers=[container('p1'),container('p1')]\nsubprocess.check_output=lambda args,**kwargs: b'one two' if args[1]=='ps' else json.dumps(containers).encode()\nvalid=existing_x_routes(['opaque'])\ncontainers[1]=container('p2')\nconflict=existing_x_routes(['opaque'])\nprint(json.dumps({'valid':valid,'conflict':conflict}))\n`;
+  const r=spawnSync('/usr/bin/python3',['-c',script],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout),{valid:{opaque:{alias:'p1',ip:'203.0.113.1'}},conflict:{}});assert.ok(!r.stdout.includes(secret));
+ }finally{await f.close();}
+});

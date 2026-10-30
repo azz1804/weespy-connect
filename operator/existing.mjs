@@ -62,6 +62,26 @@ def existing_header_cookies(header,network):
         name,sep,value=part.strip().partition('=')
         if sep:values[name]=value
     return [{'name':name,'value':value,'domain':'.'+{'linkedin':'linkedin.com','x':'x.com','instagram':'instagram.com'}[network]} for name,value in values.items()]
+def existing_x_routes(account_ids):
+    # Resolve explicit worker routing. Never guess an IP from an account number.
+    import subprocess
+    try:
+        ids=subprocess.check_output(['docker','ps','--filter','name=weespy-backend-worker-','--format','{{.ID}}'],timeout=5,stderr=subprocess.DEVNULL).decode().split()
+        if not ids or len(ids)>32:return {}
+        containers=json.loads(subprocess.check_output(['docker','inspect',*ids],timeout=5,stderr=subprocess.DEVNULL))
+        proxies=existing_json(existing_paths['proxies']) or {}
+        routes={account:set() for account in account_ids}
+        for container in containers:
+            if not any(m.get('Source')==existing_paths['x-worker'] and m.get('Destination')=='/run/secrets/x-managed-accounts.json' for m in container.get('Mounts',[])):continue
+            env=dict(e.split('=',1) for e in container.get('Config',{}).get('Env',[]) if '=' in e)
+            assignments=json.loads(env.get('WEESPY_DEDICATED_PROXY_ASSIGNMENTS','{}'))
+            for account in account_ids:
+                key='x-session:'+hashlib.sha256(('x-session-proxy\\0default\\0'+account).encode()).hexdigest()
+                alias=assignments.get(key)
+                ip=existing_ip(proxies.get(alias)) if alias else None
+                routes[account].add((alias,ip))
+        return {account:{'alias':next(iter(values))[0],'ip':next(iter(values))[1]} for account,values in routes.items() if len(values)==1 and all(next(iter(values)))}
+    except Exception:return {}
 def existing_sessions():
     accounts=[]; warnings=[]
     def emit(source,account_id,network,label,identity_known,state,session_present,**extra):
@@ -72,6 +92,7 @@ def existing_sessions():
         config=existing_json(existing_paths[source])
         if config is not None:
             if not isinstance(config,dict) or len(config)>200: raise ValueError('config')
+            routes=existing_x_routes(config.keys())
             for account_id,entry in config.items():
                 if not isinstance(entry,dict): raise ValueError('entry')
                 header=entry.get('cookie_header',''); csrf=entry.get('ct0')
@@ -83,7 +104,7 @@ def existing_sessions():
                 present=bool(values.get('auth_token')) and bool(csrf) and values.get('ct0')==csrf
                 label=existing_label(entry.get('username'))
                 enabled=entry.get('enabled',True) is True
-                emit(source,account_id,'x',label or account_id,bool(label),'present' if present else 'missing',present,enabled=enabled,ip=None,alias=None,updatedAt=None,lastCheckAt=None,cookieEvidence=existing_cookie_evidence(existing_header_cookies(header,'x'),'x'))
+                emit(source,account_id,'x',label or account_id,bool(label),'present' if present else 'missing',present,enabled=enabled,ip=routes.get(account_id,{}).get('ip'),alias=routes.get(account_id,{}).get('alias'),updatedAt=None,lastCheckAt=None,cookieEvidence=existing_cookie_evidence(existing_header_cookies(header,'x'),'x'))
     except Exception: warnings.append(source)
     source='linkedin-worker'
     try:
@@ -184,7 +205,7 @@ export function existingView(rows, discovery) {
     let state = a.stale ? 'unavailable' : a.state === 'rejected' ? 'error' : a.state === 'expired' ? 'expired' : a.enabled === false ? 'disabled' : a.state === 'missing' ? 'error' : 'existing';
     let message = a.stale ? 'Lecture de cette source impossible. Dernier état conservé ; validité inconnue.' : a.state === 'rejected' ? 'Le service a signalé une perte de session. Intervention nécessaire sur le VPS.' : a.state === 'expired' ? 'Session existante expirée. Intervention nécessaire sur le VPS.' : a.enabled === false ? 'Session retrouvée, mais ce compte est désactivé dans son service.' : a.state === 'missing' ? 'Le service connaît ce compte, mais sa session est incomplète.' : 'Session déjà présente dans le service. Authentification auprès du réseau non revérifiée.';
     if(a.source==='linkedin-firefox' && !a.stale) message=firefoxDetails[a.detail] || 'Parcours Firefox en cours ou en attente ; connexion non validée.';
-    if (!a.identityKnown) message += ' Le nom du profil et son IP ne sont pas fournis par cette source ; aucune association par numéro.';
+    if (!a.identityKnown) message += a.ip ? ' Profil non identifié ; son IP réelle reste réservée au service existant.' : ' Le nom du profil et son IP ne sont pas fournis par cette source ; aucune association par numéro.';
     if (match) {
       const configuredIP = match.ip;
       if (['existing', 'saved'].includes(match.state)) message += ' Une session de ce compte est également présente dans le dossier de l’outil.';
@@ -196,7 +217,7 @@ export function existingView(rows, discovery) {
   for (const row of result.filter(r => !r.readOnly)) {
     if (discovery.accounts.some(a => a.ip && a.ip === row.ip && a.network === row.network && !(a.identityKnown && a.label.toLowerCase() === row.label.toLowerCase()))) {
       Object.assign(row, { readOnly: true, state: 'conflict', category: 'ip', message: 'Cette IP est déjà associée à une autre session de ce réseau sur le VPS. Corrige l’affectation avant de connecter ce compte.' });
-    } else if (discovery.accounts.some(a => a.network === row.network && !a.identityKnown && a.sessionPresent)) {
+    } else if (discovery.accounts.some(a => a.network === row.network && !a.identityKnown && a.sessionPresent && !a.ip)) {
       Object.assign(row, { readOnly: true, state: 'unavailable', category: 'identity', message: 'Des sessions de ce réseau existent sans nom de profil. Il faut les identifier avant de lancer de nouvelles connexions, pour éviter un doublon.' });
     }
   }
