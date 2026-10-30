@@ -112,7 +112,7 @@ test('profile reuse is locked and account/server/IP changes isolate profiles', a
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
-function fakePage({ url = 'https://www.linkedin.com/login', text = '', formOrigin, duplicate = false, challenge = false, profile = false, network = 'linkedin', stage = 'credentials', otp = false, passwordOnly = false, loseInput = false, buttonText } = {}) {
+function fakePage({ url = 'https://www.linkedin.com/login', text = '', formOrigin, duplicate = false, challenge = false, profile = false, network = 'linkedin', stage = 'credentials', otp = false, passwordOnly = false, loseInput = false, buttonText, modern = false } = {}) {
   const location = new URL(url), form = { action: formOrigin || location.href };
   class Input { constructor() { this.form = form; this.disabled = false; } getClientRects() { return [1]; } dispatchEvent() {} }
   Object.defineProperty(Input.prototype, 'value', { get() { return this.stored; }, set(value) { if (!loseInput) this.stored = value; } });
@@ -122,10 +122,10 @@ function fakePage({ url = 'https://www.linkedin.com/login', text = '', formOrigi
     if (otp && selectors.startsWith('input[autocomplete="one-time-code"]')) return [user];
     if (otp && selectors.startsWith('input')) return [];
     if (network === 'instagram' && selectors === 'input[name="username"]') return [user];
-    if (network === 'x' && stage === 'username' && selectors === 'input[autocomplete="username"]') return [user];
+    if (network === 'x' && stage === 'username' && ((!modern && selectors === 'input[autocomplete="username"]') || (modern && selectors.startsWith('input[type="email"]')))) return duplicate ? [user, new Input()] : [user];
     if (network === 'x' && stage === 'username' && selectors === 'button,[role="button"]') return [button];
     if ((network === 'instagram' || (network === 'x' && stage === 'password')) && selectors === 'input[name="password"]') return [password];
-    if (network === 'x' && selectors === '[data-testid="LoginForm_Login_Button"]') return [button];
+    if (network === 'x' && selectors === '[data-testid="LoginForm_Login_Button"]') return modern ? [] : [button];
     if (selectors === 'input#username' && passwordOnly) return [];
     if (selectors === 'input#username') return duplicate ? [user, new Input()] : [user];
     if (selectors === 'input#password') return [password];
@@ -398,4 +398,19 @@ test('guided HTTP setup requires review, keeps preview read-only and returns no 
     const launched = await post('setup-connect', { ...data, previewId: preview.previewId }); assert.equal(launched.status, 200);
     assert.ok(!(await launched.text()).includes(secret)); await operator.job; assert.deepEqual(seen, ['x1']);
   } finally { await app.close(); }
+});
+
+
+test('X modern onboarding login fills username/password with Continue and never treats signup as login',async()=>{
+ for(const stage of ['username','password']){
+  const page=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage,buttonText:'Continue',modern:true});
+  assert.equal((await page.step()).stage,stage);
+  assert.equal((await page.step({stage,values:['synthetic']})).stage,'submitted');assert.equal(page.clicked(),1);
+ }
+ for(const url of ['https://x.com/i/jf/onboarding/web?mode=signup','https://x.com/i/jf/onboarding/web']){
+  const page=fakePage({network:'x',url,stage:'username',buttonText:'Continue',modern:true});
+  assert.equal((await page.step({stage:'username',values:['synthetic']})).stage,'outside');assert.equal(page.clicked(),0);
+ }
+ const ambiguous=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage:'username',modern:true,duplicate:true});
+ assert.equal((await ambiguous.step({stage:'username',values:['synthetic']})).stage,'changed');assert.equal(ambiguous.clicked(),0);
 });

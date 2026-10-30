@@ -16,7 +16,7 @@ export async function pageStep(network, label, action = null) {
   const text = document.body?.innerText?.toLowerCase() || '';
   const path = location.pathname;
   const login = network === 'linkedin' ? /^\/(login|uas\/login|checkpoint\/)/.test(path)
-    : network === 'x' ? /^\/i\/flow\/login/.test(path) : /^\/accounts\/(login|two_factor|login_two_factor)|^\/challenge/.test(path);
+    : network === 'x' ? (/^\/i\/flow\/login/.test(path) || (/^\/i\/jf\/onboarding\/web\/?$/.test(path) && new URL(location.href).searchParams.get('mode') === 'login')) : /^\/accounts\/(login|two_factor|login_two_factor)|^\/challenge/.test(path);
   const challenge = first('iframe[src*="captcha"],iframe[src*="arkoselabs"],iframe[src*="hcaptcha"],iframe[title*="challenge"],iframe[title*="reCAPTCHA"]').length > 0
     || (login && /captcha|verify you are human|vérifiez que vous êtes humain|confirmez que vous êtes humain|security puzzle|suspicious activity|activité suspecte|account suspended|compte suspendu/.test(text));
   const error = /not the right password|incorrect password|wrong password|mot de passe incorrect|incorrect code|invalid code|code incorrect|code invalide|too many attempts|trop de tentatives|account locked|compte verrouillé/.test(text);
@@ -49,10 +49,11 @@ export async function pageStep(network, label, action = null) {
     const user = unique('input[name="username"]'), password = unique('input[name="password"]');
     if (user && password) { stage = 'credentials'; fields = [user, password]; submit = button('button[type="submit"]', /^(log in|se connecter|connexion)$/i); }
   } else if (network === 'x') {
-    const password = unique('input[name="password"]'), user = unique('input[autocomplete="username"]');
+    const password = unique('input[name="password"]') || unique('input[type="password"][autocomplete="current-password"],input[type="password"]');
+    const user = unique('input[autocomplete="username"]') || unique('input[type="email"],input[name="text"],input[type="text"]');
     if (password) { stage = 'password'; fields = [password]; submit = button('[data-testid="LoginForm_Login_Button"]'); }
     else if (user && !/unusual|unusual activity|inhabituelle|confirm your|confirmez/.test(text)) {
-      stage = 'username'; fields = [user]; submit = button('button,[role="button"]', /^(next|suivant)$/i);
+      stage = 'username'; fields = [user]; submit = button('button,[role="button"]', /^(next|suivant|continue|continuer)$/i);
     }
   }
   // Buttons can be disabled until inputs are filled; query again after filling.
@@ -70,8 +71,8 @@ export async function pageStep(network, label, action = null) {
   submit = null;
   // An actual visible submit control is required. Never submit a hidden or unknown form.
   if (!submit) {
-    if (network === 'x' && stage === 'password') submit = button('[data-testid="LoginForm_Login_Button"]');
-    else submit = button('button[type="submit"],input[type="submit"],button,[role="button"]', stage === 'username' ? /^(next|suivant)$/i : /^(sign in|log in|se connecter|s[’']identifier|connexion|verify|vérifier|confirm|confirmer|continue|continuer|next|suivant|submit|envoyer)$/i);
+    if (network === 'x' && stage === 'password') submit = button('[data-testid="LoginForm_Login_Button"]') || button('button[type="submit"],button,[role="button"]', /^(log in|sign in|se connecter|connexion|continue|continuer)$/i);
+    else submit = button('button[type="submit"],input[type="submit"],button,[role="button"]', stage === 'username' ? /^(next|suivant|continue|continuer)$/i : /^(sign in|log in|se connecter|s[’']identifier|connexion|verify|vérifier|confirm|confirmer|continue|continuer|next|suivant|submit|envoyer)$/i);
   }
   if (!submit || (submit.form && new URL(submit.form.action || location.href, location.href).origin !== location.origin)) return { stage: 'human', reason: 'submit' };
   submit.click(); return { stage: 'submitted' };
