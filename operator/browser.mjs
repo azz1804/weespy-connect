@@ -10,7 +10,7 @@ import { digest, identity, fail } from './model.mjs';
 export async function pageStep(network, label, action = null) {
   const hosts = { linkedin: ['www.linkedin.com', 'linkedin.com'], x: ['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'], instagram: ['www.instagram.com', 'instagram.com'] };
   if (location.protocol !== 'https:' || !hosts[network]?.includes(location.hostname)) return { stage: 'untrusted' };
-  const visible = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && !e.disabled;
+  const visible = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).opacity !== '0' && !e.disabled && !e.inert && !e.closest?.('[inert],[hidden],[aria-hidden="true"]');
   const first = selectors => [...document.querySelectorAll(selectors)].filter(visible);
   const unique = selectors => { const list = first(selectors); return list.length === 1 ? list[0] : null; };
   const text = document.body?.innerText?.toLowerCase() || '';

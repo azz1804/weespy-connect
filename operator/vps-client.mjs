@@ -13,7 +13,8 @@ export async function openVpsView(target,signal){
   const child=spawn('ssh',args,{stdio:'ignore'});let failed=false;child.on('error',()=>{failed=true;});child.on('exit',()=>{failed=true;});
   const close=()=>{child.kill('SIGTERM');signal?.removeEventListener('abort',close);};signal?.addEventListener('abort',close,{once:true});
   try{
-    for(let attempt=0;attempt<12;attempt++){
+    const deadline=Date.now()+20000;
+    for(let attempt=0;attempt<80 && Date.now()<deadline;attempt++){
       signal?.throwIfAborted();if(failed)break;
       try{const r=await fetch(`http://127.0.0.1:${port}/vnc.html`,{signal:AbortSignal.timeout(2000)});if(r.ok)return {url:`http://127.0.0.1:${port}/vnc.html?autoconnect=true&resize=scale`,close};}catch{}
       await delay(250,undefined,{signal});
@@ -37,7 +38,7 @@ export async function connectOnVps({remote,target,row,signal,report,waitForUser,
       if(signature!==previous){report(status.state,status.message,{category:status.category,ipVerified:status.ipVerified,verifiedAt:status.verifiedAt,verificationScope:status.verificationScope,capturedAt:status.capturedAt});previous=signature;}
       if(status.terminal){finished=true;if(status.state==='error'){const error=new OperatorError(status.message);error.category=status.category;error.fatal=status.category==='vps';throw error;}return status.state;}
       if(status.state==='human' && status.actions?.length && status.promptId!==answeredPrompt){
-        if(!screen)screen=await view(target,signal);
+        if(!screen){try{screen=await view(target,signal);}catch(error){error.category='vps';error.fatal=true;throw error;}}
         report('human',status.message,{category:status.category,browserUrl:screen.url});
         const action=await waitForUser(status.actions,signal);
         answeredPrompt=status.promptId;

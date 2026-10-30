@@ -112,13 +112,14 @@ test('profile reuse is locked and account/server/IP changes isolate profiles', a
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
-function fakePage({ url = 'https://www.linkedin.com/login', text = '', formOrigin, duplicate = false, challenge = false, profile = false, network = 'linkedin', stage = 'credentials', otp = false, passwordOnly = false, loseInput = false, buttonText, modern = false } = {}) {
+function fakePage({ url = 'https://www.linkedin.com/login', text = '', formOrigin, duplicate = false, challenge = false, profile = false, network = 'linkedin', stage = 'credentials', otp = false, passwordOnly = false, loseInput = false, buttonText, modern = false, hiddenPassword = false } = {}) {
   const location = new URL(url), form = { action: formOrigin || location.href };
   class Input { constructor() { this.form = form; this.disabled = false; } getClientRects() { return [1]; } dispatchEvent() {} }
   Object.defineProperty(Input.prototype, 'value', { get() { return this.stored; }, set(value) { if (!loseInput) this.stored = value; } });
-  const user = new Input(), password = new Input(); let clicked = 0;
+  const user = new Input(), password = new Input(), decoy = new Input(); decoy.inert = true; let clicked = 0;
   const button = { ...new Input(), innerText: buttonText || (otp ? 'Verify' : stage === 'username' ? 'Next' : network === 'instagram' ? 'Log in' : 'Sign in'), form, getClientRects: () => [1], click: () => { clicked++; } };
   const querySelectorAll = selectors => {
+    if (hiddenPassword && selectors.includes('input[name="password"]')) return [decoy];
     if (otp && selectors.startsWith('input[autocomplete="one-time-code"]')) return [user];
     if (otp && selectors.startsWith('input')) return [];
     if (network === 'instagram' && selectors === 'input[name="username"]') return [user];
@@ -413,4 +414,12 @@ test('X modern onboarding login fills username/password with Continue and never 
  }
  const ambiguous=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage:'username',modern:true,duplicate:true});
  assert.equal((await ambiguous.step({stage:'username',values:['synthetic']})).stage,'changed');assert.equal(ambiguous.clicked(),0);
+});
+
+
+test('X invisible inert password placeholder never overrides the visible username field',async()=>{
+ const page=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage:'username',modern:true,hiddenPassword:true,buttonText:'Continue'});
+ assert.equal((await page.step()).stage,'username');
+ assert.equal((await page.step({stage:'username',values:['synthetic_login']})).stage,'submitted');
+ assert.equal(page.user.stored,'synthetic_login');assert.equal(page.password.stored,undefined);assert.equal(page.clicked(),1);
 });

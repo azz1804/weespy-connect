@@ -57,3 +57,11 @@ test('VPS storage failure stops the queue instead of trying another account',asy
   const remote={startJob:async()=>({...initial,state:'error',terminal:true,category:'vps',message:'Sauvegarde impossible'})};
   await assert.rejects(connectOnVps({remote,row,signal:signal(),report(){}}),e=>e.fatal&&e.category==='vps');
 });
+
+
+test('remote screen failures stop the queue and stop the unfinished VPS job',async()=>{
+ const actions=[];
+ const remote={startJob:async()=>({...initial,state:'human',actions:['resume'],promptId:1}),jobAction:async(...args)=>{actions.push(args);return {};}};
+ await assert.rejects(connectOnVps({remote,row,signal:signal(),report(){},view:async()=>{throw Error('SSH screen unavailable');}}),e=>e.fatal&&e.category==='vps');
+ assert.equal(actions[0][1],'stop');
+});
