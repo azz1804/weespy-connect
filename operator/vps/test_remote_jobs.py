@@ -44,6 +44,15 @@ class JobTests(unittest.TestCase):
     def test_old_human_prompt_cannot_resume_a_new_step(self):
         result=self.start();path=self.ns['job_path'](result['jobId']);self.ns['write'](path+'/status.json',dict(state='human',actions=['resume'],promptId=2,terminal=False))
         with self.assertRaises(ValueError):self.ns['job_request'](dict(op='job_action',jobId=result['jobId'],action='resume',promptId=1))
+    def test_unknown_profile_with_another_known_ip_does_not_block_browser(self):
+        self.ns['existing_sessions']=lambda:{'accounts':[dict(network='linkedin',identityKnown=False,label='opaque',ip='192.0.2.2')],'warnings':[]}
+        self.assertEqual(self.start()['state'],'checking');self.assertTrue(self.started)
+    def test_unknown_profile_without_ip_still_blocks_browser(self):
+        self.ns['existing_sessions']=lambda:{'accounts':[dict(network='linkedin',identityKnown=False,label='opaque',ip=None)],'warnings':[]}
+        self.assertEqual(self.start(),{'failure':'existing_conflict'});self.assertFalse(self.started)
+    def test_unknown_profile_on_same_ip_blocks_browser(self):
+        self.ns['existing_sessions']=lambda:{'accounts':[dict(network='linkedin',identityKnown=False,label='opaque',ip='192.0.2.1')],'warnings':[]}
+        self.assertEqual(self.start(),{'failure':'existing_conflict'});self.assertFalse(self.started)
     def test_existing_service_account_prevents_duplicate_browser(self):
         self.ns['existing_sessions']=lambda:{'accounts':[dict(network='linkedin',identityKnown=True,label='synthetic',ip='192.0.2.1')],'warnings':[]}
         self.assertEqual(self.start(),{'failure':'existing_conflict'});self.assertFalse(self.started)

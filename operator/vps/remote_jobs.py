@@ -48,7 +48,7 @@ def job_request(req):
             existing=existing_sessions()
             if existing['warnings']:return {'failure':'existing_conflict'}
             for old in existing['accounts']:
-                if old['network']==a['network'] and (not old['identityKnown'] or old['label'].lower()==label.lower() or old['ip']==p['ip']):return {'failure':'existing_conflict'}
+                if old['network']==a['network'] and ((not old['identityKnown'] and not old['ip']) or (old['identityKnown'] and old['label'].lower()==label.lower()) or old['ip']==p['ip']):return {'failure':'existing_conflict'}
             job=uuid.uuid4().hex;path=job_path(job);os.mkdir(path,0o700)
             profile_key=hashlib.sha256(json.dumps([a['network'],label,p['ip']]).encode()).hexdigest()
             profile=root+'/vps-profiles/'+profile_key;safe(profile);os.makedirs(profile,mode=0o700,exist_ok=True);os.chown(profile,1000,1000)
