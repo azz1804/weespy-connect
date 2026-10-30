@@ -204,6 +204,7 @@ export async function connectAccount({ target, row, signal, report, waitForUser,
       let state;
       try { state = await session.snapshot(); snapshotErrors = 0; }
       catch (e) { if (++snapshotErrors <= 3) { await sleep(1000, undefined, { signal }); continue; } throw e; }
+      if (state.reason === 'rate_limited') problem('Le réseau limite temporairement cette connexion. Attends avant de réessayer ; aucune nouvelle tentative automatique.', 'verification');
       if (state.stage === 'untrusted') problem('La page a quitté le domaine attendu. Aucune donnée saisie.', 'browser');
       if (state.identityMismatch) problem('Le profil connecté ne correspond pas au compte attendu. Aucun export.', 'identity');
       const cookies = await session.cookies();

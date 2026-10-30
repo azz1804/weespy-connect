@@ -425,9 +425,13 @@ test('X invisible inert password placeholder never overrides the visible usernam
 });
 
 
-test('X temporary login limit is explicit and never resubmits credentials after Resume',async()=>{
+test('X temporary login limit ends only that account without retry or waiting',async()=>{
  const page=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage:'username',modern:true,text:"We've temporarily limited your login. Please try again later."});
  assert.equal((await page.step()).reason,'rate_limited');
- const result=await engine([{stage:'human',reason:'rate_limited'},{stage:'credentials'}],{waitForUser:(()=>{let prompts=0;return async()=>++prompts===1?'resume':'skip';})()});
- assert.deepEqual(result.submitted,[]);assert.equal(result.saved.length,0);assert.ok(result.reports.some(r=>r[1].includes('limite temporairement')));
+ let submitted=0,saved=0,closed=0,prompted=0;
+ await assert.rejects(engine([{stage:'human',reason:'rate_limited'}],{
+  waitForUser:async()=>{prompted++;return 'resume';},save:async()=>{saved++;},
+  open:async()=>({snapshot:async()=>({stage:'human',reason:'rate_limited'}),cookies:async()=>[],submit:async()=>{submitted++;},close:async()=>{closed++;}})
+ }),error=>error.category==='verification'&&!error.fatal&&/limite temporairement/.test(error.message));
+ assert.equal(submitted,0);assert.equal(saved,0);assert.equal(prompted,0);assert.equal(closed,1);
 });
