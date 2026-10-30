@@ -423,3 +423,11 @@ test('X invisible inert password placeholder never overrides the visible usernam
  assert.equal((await page.step({stage:'username',values:['synthetic_login']})).stage,'submitted');
  assert.equal(page.user.stored,'synthetic_login');assert.equal(page.password.stored,undefined);assert.equal(page.clicked(),1);
 });
+
+
+test('X temporary login limit is explicit and never resubmits credentials after Resume',async()=>{
+ const page=fakePage({network:'x',url:'https://x.com/i/jf/onboarding/web?mode=login',stage:'username',modern:true,text:"We've temporarily limited your login. Please try again later."});
+ assert.equal((await page.step()).reason,'rate_limited');
+ const result=await engine([{stage:'human',reason:'rate_limited'},{stage:'credentials'}],{waitForUser:(()=>{let prompts=0;return async()=>++prompts===1?'resume':'skip';})()});
+ assert.deepEqual(result.submitted,[]);assert.equal(result.saved.length,0);assert.ok(result.reports.some(r=>r[1].includes('limite temporairement')));
+});

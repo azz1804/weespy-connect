@@ -19,6 +19,8 @@ export async function pageStep(network, label, action = null) {
     : network === 'x' ? (/^\/i\/flow\/login/.test(path) || (/^\/i\/jf\/onboarding\/web\/?$/.test(path) && new URL(location.href).searchParams.get('mode') === 'login')) : /^\/accounts\/(login|two_factor|login_two_factor)|^\/challenge/.test(path);
   const challenge = first('iframe[src*="captcha"],iframe[src*="arkoselabs"],iframe[src*="hcaptcha"],iframe[title*="challenge"],iframe[title*="reCAPTCHA"]').length > 0
     || (login && /captcha|verify you are human|vérifiez que vous êtes humain|confirmez que vous êtes humain|security puzzle|suspicious activity|activité suspecte|account suspended|compte suspendu/.test(text));
+  const rateLimited = login && /temporarily limited your login|too many attempts|trop de tentatives|connexion temporairement limit[eé]e/.test(text);
+  if (rateLimited) return { stage: 'human', reason: 'rate_limited' };
   const error = /not the right password|incorrect password|wrong password|mot de passe incorrect|incorrect code|invalid code|code incorrect|code invalide|too many attempts|trop de tentatives|account locked|compte verrouillé/.test(text);
   const credentialChange = first('input[autocomplete="new-password"],input[name="newPassword"]').length > 0
     || /reset your password|change your password|choisissez un nouveau mot de passe|changer votre mot de passe/.test(text);
@@ -227,7 +229,7 @@ export async function connectAccount({ target, row, signal, report, waitForUser,
         return 'saved';
       }
       stableSince = null; confirmed = false;
-      if (['rejected','challenge','credential_change'].includes(state.reason)) unsafe = true;
+      if (['rejected','challenge','credential_change','rate_limited'].includes(state.reason)) unsafe = true;
       const credentialStage = ['credentials','password'].includes(state.stage);
       const credentialUsed = attempts.has('credentials') || attempts.has('password');
       // One continuation after an actually submitted 2FA, same browser/profile/IP.
@@ -261,7 +263,8 @@ export async function connectAccount({ target, row, signal, report, waitForUser,
         if (result?.stage !== 'changed') unsafe = true;
       }
       if (++unknown < 10 && !unsafe) { await sleep(1000, undefined, { signal }); continue; }
-      const message = state.reason === 'rejected' ? 'Le réseau a refusé cet essai. Vérifie les accès dans Chrome ; aucune nouvelle tentative automatique.'
+      const message = state.reason === 'rate_limited' ? 'Le réseau limite temporairement cette connexion. Attends avant de réessayer ; aucune nouvelle tentative automatique. Tu peux passer ce compte.'
+        : state.reason === 'rejected' ? 'Le réseau a refusé cet essai. Vérifie les accès dans Chrome ; aucune nouvelle tentative automatique.'
         : state.reason === 'credential_change' ? 'Le réseau demande un changement de mot de passe. Effectue-le toi-même dans Chrome.'
         : 'Connexion non validée. Termine la vérification dans Chrome, puis reprends, ou passe ce compte.';
       report('human', message, { category: state.reason === 'rejected' ? 'credentials' : 'verification' });
