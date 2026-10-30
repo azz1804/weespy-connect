@@ -78,21 +78,30 @@ export function legacyInventory(accounts, proxies) {
   return validateInventory({ version: 1, proxies: all.map(p => ({ ip: p.ip, port: proxies.isp_fixed.port, ...proxies.isp_fixed.credential_groups[p.group] })),
     accounts: rows.map(r => ({ network: r.network, index: r.index, record: r.record })) });
 }
-export function mergeImport(inventory, { proxies: proxyText, accounts: accountText, network }, reservedIPs = []) {
+export function mergeImport(inventory, { proxies: proxyText, accounts: accountText, network }, reservedIPs = [], existingLabels = []) {
   const next = structuredClone(inventory);
-  for (const proxy of parseProxies(proxyText)) {
+  const records = parseAccounts(network, accountText);
+  const candidates = parseProxies(proxyText);
+  for (const proxy of candidates) {
     const existing = next.proxies.find(p => p.ip === proxy.ip);
     if (existing && JSON.stringify(existing) !== JSON.stringify(proxy)) fail('Cette IP existe avec des accès différents. Recharge l’inventaire avant de la modifier.');
-    if (!existing) next.proxies.push(proxy);
+    // Explicit stock imports can add unused IPs; account imports only add a deficit.
+    if (!existing && !records.length) next.proxies.push(proxy);
   }
-  for (const record of parseAccounts(network, accountText)) {
+  for (const record of records) {
     const existing = next.accounts.find(a => a.network === network && identity(network, a.record) === identity(network, record));
     if (existing) {
       if (JSON.stringify(existing.record) !== JSON.stringify(record)) fail('Ce compte existe avec des données différentes. Aucun remplacement automatique.');
       continue;
     }
-    const offset = next.proxies.findIndex((proxy, i) => !reservedIPs.includes(proxy.ip) && !next.accounts.some(a => a.network === network && a.index === i + 1));
-    if (offset < 0) fail('Pas assez d’IP libres pour ce réseau. Ajoute des IP fixes.');
+    const label = network === 'linkedin' ? record.profile : record.username;
+    if (existingLabels.some(existing => existing.toLowerCase() === label.toLowerCase())) continue;
+    let offset = next.proxies.findIndex((proxy, i) => !reservedIPs.includes(proxy.ip) && !next.accounts.some(a => a.network === network && a.index === i + 1));
+    if (offset < 0) {
+      const extra = candidates.find(p => !reservedIPs.includes(p.ip) && !next.proxies.some(current => current.ip === p.ip));
+      if (extra && next.proxies.length < 25) { next.proxies.push(extra); offset = next.proxies.length - 1; }
+    }
+    if (offset < 0) fail('Pas assez d’IP libres pour ce réseau. Toutes les IP existantes utilisables sont déjà attribuées ; ajoute uniquement les IP manquantes (25 IP maximum).');
     next.accounts.push({ network, index: offset + 1, record });
   }
   return validateInventory(next);

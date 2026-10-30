@@ -18,7 +18,7 @@ const sourcePaths = {
   proxies:'/etc/weespy/secrets/runtime/dedicated-proxies.json',
 };
 const secret = 'SYNTHETIC_EXISTING_SESSION_SECRET';
-const inventory = () => mergeImport({ version: 1, proxies: [], accounts: [] }, { network: 'linkedin', proxies: '203.0.113.1:12323:fake:fake 203.0.113.2:12323:fake:fake', accounts: 'owner@example.test:fake:owner:' });
+const inventory = () => mergeImport(mergeImport({ version: 1, proxies: [], accounts: [] }, { network: 'linkedin', proxies: '203.0.113.1:12323:fake:fake 203.0.113.2:12323:fake:fake', accounts: '' }), { network: 'linkedin', accounts: 'owner@example.test:fake:owner:' });
 const external = overrides => ({ source: 'linkedin-worker', id: 'li01', network: 'linkedin', label: 'owner', identityKnown: true, state: 'present', sessionPresent: true, enabled: null, ip: '203.0.113.2', alias: 'p01', updatedAt: '2026-10-29T10:00:00Z', lastCheckAt: null, ...overrides });
 const discovery = accounts => ({ accounts, warnings: [] });
 async function fixture() {

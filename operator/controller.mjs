@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { cookieEvidence } from './cookie-evidence.mjs';
 import { Remote } from './remote.mjs';
 import { connectOnVps } from './vps-client.mjs';
-import { fail, mergeImport, publicInventory, rowsOf, parseAccounts, identity, digest, displayError as safeError } from './model.mjs';
+import { fail, mergeImport, publicInventory, rowsOf, parseAccounts, parseProxies, identity, digest, displayError as safeError } from './model.mjs';
 import { existingView, reconcileDiscovery } from './existing.mjs';
 
 const storedStates = new Set(['existing', 'saved']);
@@ -21,11 +21,13 @@ export class Operator {
     data.accounts = data.accounts.map(row => ({ ...row, history: this.history.get(row.key) || [], ipHealth: this.ipHealth.get(row.ip) || { state: 'unknown' } }));
     data.accounts = existingView(data.accounts, this.discovery);
     data.proxies = data.proxies.map(proxy => ({ ...proxy, reservedNetworks: [...new Set(this.discovery.accounts.filter(a => a.ip === proxy.ip).map(a => a.network))] }));
+    data.proxies = data.proxies.map(proxy => ({ ...proxy, availableNetworks: ['linkedin', 'x', 'instagram'].filter(network => !proxy.reservedNetworks.includes(network) && !this.inventory.accounts.some(a => a.network === network && this.inventory.proxies[a.index - 1].ip === proxy.ip)) }));
     if (agent) data.accounts = data.accounts.map(({ label, ...rest }) => rest);
     return { ...data, execution: 'vps', ...(!agent ? {browserUrl:this.browserUrl||null} : {}), target: this.target?.host ?? null, ...(!agent ? { connection: this.target } : {}), busy: this.busy, active: this.active, queue: this.queue,
       actions: this.pending?.actions || [], message: this.message, loaded: !!this.remote, vps: this.vps, checkingHealth: !!this.healthJob, ipChecks: this.ipChecks || null, discoveryWarnings: this.discovery.warnings };
   }
   availableKeys(inventory = this.inventory) { return new Set(existingView(publicInventory(inventory, this.statuses).accounts, this.discovery).filter(a => !a.readOnly).map(a => a.key)); }
+  existingLabels(network) { return this.discovery.accounts.filter(a => a.network === network && a.identityKnown).map(a => a.label); }
   reservedIPs(network) { return this.discovery.accounts.filter(a => a.network === network && a.ip).map(a => a.ip); }
   requireDiscovery() { if (this.discovery.warnings.length) fail('Certaines sessions existantes ne peuvent pas être vérifiées. Recharge le VPS avant de lancer des connexions pour éviter les doublons.'); }
   requireIdle() { if (this.busy) fail('Une connexion est en cours. Arrête la file avant de modifier les accès.'); }
@@ -77,14 +79,14 @@ export class Operator {
   import(data) {
     this.requireIdle(); if (!this.remote) fail('Renseigne le VPS dans les réglages avant d’ajouter tes comptes.');
     this.requireDiscovery();
-    this.inventory = mergeImport(this.inventory, data, this.reservedIPs(data.network)); this.message = 'Import préparé en mémoire.'; return this.snapshot();
+    this.inventory = mergeImport(this.inventory, data, this.reservedIPs(data.network), this.existingLabels(data.network)); this.message = 'Import préparé en mémoire.'; return this.snapshot();
   }
   importAndConnect(data) {
     this.requireIdle(); if (!this.remote) fail('Renseigne d’abord le VPS dans les réglages.');
     this.requireDiscovery();
     const records = parseAccounts(data.network, data.accounts);
     if (!records.length) fail('Colle au moins un compte à connecter.');
-    const next = mergeImport(this.inventory, data, this.reservedIPs(data.network));
+    const next = mergeImport(this.inventory, data, this.reservedIPs(data.network), this.existingLabels(data.network));
     const requested = new Set(records.map(r => identity(data.network, r)));
     const available = this.availableKeys(next);
     const keys = rowsOf(next).filter(r => available.has(r.key) && r.network === data.network && requested.has(identity(r.network, r.record)) && !storedStates.has(this.statuses.get(r.key)?.state)).map(r => r.key);
@@ -98,24 +100,39 @@ export class Operator {
     if (!data.accounts || typeof data.accounts !== 'object' || Array.isArray(data.accounts) || typeof data.proxies !== 'string' || typeof data.includePending !== 'boolean') fail('Import incomplet. Reviens à la saisie des accès.');
     const names = { linkedin: 'LinkedIn', x: 'X', instagram: 'Instagram' };
     if (Object.keys(data.accounts).some(key => !Object.hasOwn(names, key))) fail('Réseau inconnu dans l’import.');
-    let next = mergeImport(this.inventory, { proxies: data.proxies, network: 'linkedin', accounts: '' });
-    const requested = new Set();
+    let next = this.inventory;
+    const candidates = parseProxies(data.proxies);
+    let hasAccounts = false;
+    const requested = new Set(), existingRequested = new Set();
     for (const [network, name] of Object.entries(names)) {
       const text = data.accounts[network] ?? '';
       if (typeof text !== 'string') fail('Colle les comptes dans la zone du réseau correspondant.');
       try {
-        for (const record of parseAccounts(network, text)) requested.add(`${network}:${identity(network, record)}`);
-        next = mergeImport(next, { network, accounts: text }, this.reservedIPs(network));
+        const records = parseAccounts(network, text);
+        for (const record of records) {
+          const person = `${network}:${identity(network, record)}`;
+          requested.add(person);
+          const label = network === 'linkedin' ? record.profile : record.username;
+          if (this.existingLabels(network).some(existing => existing.toLowerCase() === label.toLowerCase())
+            && !this.inventory.accounts.some(a => a.network === network && identity(network, a.record) === identity(network, record))) existingRequested.add(`${network}:${label.toLowerCase()}`);
+        }
+        if (records.length) {
+          hasAccounts = true;
+          next = mergeImport(next, { proxies: data.proxies, network, accounts: text }, this.reservedIPs(network), this.existingLabels(network));
+        }
       } catch (error) { fail(`${name} : ${safeError(error)}`); }
     }
+    if (!hasAccounts) next = mergeImport(next, { proxies: data.proxies, network: 'linkedin', accounts: '' });
     const available = this.availableKeys(next);
     const keys = rowsOf(next).filter(r => available.has(r.key) && !storedStates.has(this.statuses.get(r.key)?.state) && (data.includePending || requested.has(`${r.network}:${identity(r.network, r.record)}`))).map(r => r.key);
     // Bind the review to this server, its inventory and the exact connection selection.
-    const previewId = digest(JSON.stringify([this.target, this.inventory, next, keys]));
+    const previewId = digest(JSON.stringify([this.target, this.inventory, next, keys, data.proxies, data.accounts, data.includePending]));
     const publicRows = publicInventory(next, this.statuses).accounts;
     const preview = { previewId, target: this.target.host, accounts: publicRows.filter(r => keys.includes(r.key)),
       totalAccounts: next.accounts.length, totalIPs: next.proxies.length, newAccounts: next.accounts.length - this.inventory.accounts.length,
-      newIPs: next.proxies.length - this.inventory.proxies.length, skipped: rowsOf(next).filter(r => (data.includePending || requested.has(`${r.network}:${identity(r.network, r.record)}`)) && (storedStates.has(this.statuses.get(r.key)?.state) || !available.has(r.key))).length };
+      reusedIPs: new Set(publicRows.filter(r => keys.includes(r.key) && this.inventory.proxies.some(p => p.ip === r.ip)).map(r => r.ip)).size,
+      unusedIPs: candidates.filter(p => !next.proxies.some(current => current.ip === p.ip)).length,
+      newIPs: next.proxies.length - this.inventory.proxies.length, skipped: existingRequested.size + rowsOf(next).filter(r => (data.includePending || requested.has(`${r.network}:${identity(r.network, r.record)}`)) && (storedStates.has(this.statuses.get(r.key)?.state) || !available.has(r.key))).length };
     return { next, keys, preview };
   }
   previewSetup(data) { return this.prepareSetup(data).preview; }

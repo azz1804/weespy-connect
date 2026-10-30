@@ -19,7 +19,7 @@ const base32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const proxyText = '203.0.113.1:12323:proxy-user:proxy-secret\\\n203.0.113.2:2345:other-user:other-secret';
 const input = `person@example.test:${secret}:test-profile:${base32}`;
 const empty = () => ({ version: 1, proxies: [], accounts: [] });
-const inventory = () => mergeImport(empty(), { proxies: proxyText, network: 'linkedin', accounts: input });
+const inventory = () => mergeImport(mergeImport(empty(), { proxies: proxyText, network: 'linkedin', accounts: '' }), { network: 'linkedin', accounts: input });
 const cookies = [{ name: 'li_at', value: 'SYNTHETIC_COOKIE_TEST_ONLY', domain: '.linkedin.com', session: true }, { name: 'JSESSIONID', value: 'SYNTHETIC_CSRF', domain: '.linkedin.com', session: true }];
 const row = () => rowsOf(inventory())[0];
 const abortSignal = () => new AbortController().signal;

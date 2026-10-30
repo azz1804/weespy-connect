@@ -13,7 +13,15 @@ import { Operator } from './controller.mjs';
 export const HERE = dirname(fileURLToPath(import.meta.url));
 export const RUNTIME = join(homedir(), 'WeespyAccounts', 'operator-runtime.json');
 export const SETTINGS = join(homedir(), 'WeespyAccounts', 'operator-settings.json');
-const same = (a, b) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const same = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export async function readLocalAccess(path = RUNTIME) {
+  try {
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o077)) return null;
+    const value = JSON.parse(await readFile(path, 'utf8'));
+    return /^http:\/\/127\.0\.0\.1:\d+$/.test(value.origin) && /^[a-f0-9]{64}$/.test(value.token) ? value : null;
+  } catch { return null; }
+}
 export async function bodyOf(request) {
   const chunks = []; let size = 0;
   for await (const chunk of request) { size += chunk.length; if (size > 256_000) fail('Import trop volumineux.'); chunks.push(chunk); }
@@ -33,7 +41,7 @@ export async function installBridge(provider, run = commandRunner) {
 }
 export async function createServer({ operator = new Operator(), token = randomBytes(32).toString('hex'), install = installBridge, onTarget = async () => {}, port = 0 } = {}) {
   let origin;
-  const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
+  const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/access.js', ['access.js', 'text/javascript; charset=utf-8']], ['/style.css', ['style.css', 'text/css; charset=utf-8']]]);
   const server = http.createServer(async (request, response) => {
     const json = (code, data) => { if (!response.headersSent) response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); };
     response.setHeader('Cache-Control', 'no-store'); response.setHeader('X-Content-Type-Options', 'nosniff'); response.setHeader('Referrer-Policy', 'no-referrer');
@@ -42,7 +50,14 @@ export async function createServer({ operator = new Operator(), token = randomBy
       if (request.headers.host !== new URL(origin).host || (request.headers.origin && request.headers.origin !== origin)) return json(403, { error: 'Accès local uniquement.' });
       const asset = assets.get(request.url);
       if (asset && request.method === 'GET') { response.writeHead(200, { 'Content-Type': asset[1] }); return response.end(await readFile(join(HERE, 'public', asset[0]))); }
-      if (!same(request.headers.authorization, `Bearer ${token}`)) return json(401, { error: 'Ouvre l’application depuis son lanceur.' });
+      const cookieName = `weespy-local-${new URL(origin).port}`;
+      const cookie = (request.headers.cookie || '').split(';').map(v => v.trim()).find(v => v.startsWith(cookieName + '='))?.slice(cookieName.length + 1);
+      const bearerAccess = same(request.headers.authorization, `Bearer ${token}`);
+      const cookieAccess = same(cookie, token) && request.headers['sec-fetch-site'] === 'same-origin'
+        && (request.method === 'GET' || request.headers.origin === origin);
+      if (!bearerAccess && !cookieAccess) return json(401, { error: 'Accès à WeeSpy Connect non reconnu. Ouvre « Lancer-WeeSpy-Connect.command » pour rétablir la connexion.' });
+      // Only an already authenticated request can authorize other tabs in this browser.
+      if (bearerAccess) response.setHeader('Set-Cookie', `${cookieName}=${token}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=2592000`);
       if (request.url === '/api/state' && request.method === 'GET') return json(200, operator.snapshot());
       if (request.method !== 'POST' || request.headers['content-type'] !== 'application/json') return json(405, { error: 'Requête invalide.' });
       const data = await bodyOf(request);
@@ -82,9 +97,9 @@ async function main() {
   const info = await lstat(base); if (info.isSymbolicLink() || info.uid !== process.getuid()) fail('Dossier local non sûr.');
   await chmod(base, 0o700);
   // Reuse an already running app; never silently replace another session's token.
+  const old = await readLocalAccess();
   try {
-    const old = JSON.parse(await readFile(RUNTIME, 'utf8'));
-    if (/^http:\/\/127\.0\.0\.1:\d+$/.test(old.origin) && /^[a-f0-9]{64}$/.test(old.token)) {
+    if (old) {
       const response = await fetch(old.origin + '/api/state', { headers: { Authorization: `Bearer ${old.token}` }, signal: AbortSignal.timeout(1000) });
       if (response.ok) { if (!process.argv.includes('--no-open')) spawn('/usr/bin/open', [old.origin + '/#' + old.token], { stdio: 'ignore' }).unref(); return; }
     }
@@ -94,12 +109,12 @@ async function main() {
     try { await writeFile(temp, JSON.stringify(sshTarget(target)), { mode: 0o600, flag: 'wx' }); await rename(temp, SETTINGS); }
     finally { await rm(temp, { force: true }); }
   };
-  const app = await createServer({ port: 49831, onTarget });
+  const app = await createServer({ port: 49831, onTarget, ...(old ? { token: old.token } : {}) });
   const temp = RUNTIME + '.' + process.pid;
   await writeFile(temp, JSON.stringify({ origin: app.origin, token: app.token }), { mode: 0o600, flag: 'wx' });
   await rename(temp, RUNTIME);
   let closing = false;
-  const close = async () => { if (closing) return; closing = true; await app.close(); await rm(RUNTIME, { force: true }); };
+  const close = async () => { if (closing) return; closing = true; await app.close(); }; // Keep private access so existing tabs survive a restart.
   process.once('SIGINT', () => close().catch(() => { process.exitCode = 1; })); process.once('SIGTERM', () => close().catch(() => { process.exitCode = 1; }));
   let target = { host: 'mon-vps' };
   try { target = sshTarget(JSON.parse(await readFile(SETTINGS, 'utf8'))); } catch { /* Default WeeSpy VPS on first launch. */ }

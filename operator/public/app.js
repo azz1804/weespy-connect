@@ -1,7 +1,7 @@
+import { createLocalAccess, accessErrorMessage } from './access.js';
 const $ = id => document.getElementById(id);
-const initial = location.hash.slice(1);
-if (/^[a-f0-9]{64}$/.test(initial)) { sessionStorage.setItem('weespy-local', initial); history.replaceState(null, '', '/'); }
-const token = sessionStorage.getItem('weespy-local');
+const access = createLocalAccess(window, () => refresh().catch(showAccessError));
+let accessFailed = false;
 const labels = { ready: 'À connecter', existing: 'Session sur VPS', saved: 'Connexion validée', human: 'À vérifier', checking: 'Contrôle IP…', connecting: 'Connexion…', saving: 'Sauvegarde sur VPS…', error: 'Erreur', expired: 'Session expirée', skipped: 'À reprendre', stopped: 'Arrêté', disabled: 'Désactivé', unavailable: 'État non vérifié', conflict: 'IP déjà utilisée' };
 const networks = { linkedin: 'LinkedIn', x: 'X', instagram: 'Instagram' };
 const categoryNames = { ip: 'IP', vps: 'VPS', session: 'Session', browser: 'Connexion', credentials: 'Identifiants', identity: 'Identité', verification: 'Vérification' };
@@ -19,14 +19,14 @@ const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(val
 function element(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
 function notice(text, error = false) { $('notice').textContent = text; $('notice').hidden = !text; $('notice').classList.toggle('error', error); }
 async function api(path, data) {
-  const response = await fetch('/api/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + token, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
-  const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Opération impossible.'); return result;
+  const response = await fetch('/api/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: 'Bearer ' + access.getToken(), ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) });
+  const result = await response.json(); if (!response.ok) throw Object.assign(new Error(result.error || 'Opération impossible.'), { status: response.status }); return result;
 }
 async function act(work, errorId) {
   if (pending) return; pending = true; updateSetupContext(); disable();
   if (errorId) $(errorId).hidden = true;
   try { await work(); await refresh(); }
-  catch (error) { if (errorId) { $(errorId).textContent = error.message; $(errorId).hidden = false; $(errorId).tabIndex = -1; $(errorId).focus(); } else notice(error.message || 'Connexion locale interrompue.', true); }
+  catch (error) { if (error.status === 401) error.message = accessErrorMessage(error); if (errorId) { $(errorId).textContent = error.message; $(errorId).hidden = false; $(errorId).tabIndex = -1; $(errorId).focus(); } else notice(error.message || 'Connexion locale interrompue.', true); }
   finally { pending = false; updateSetupContext(); disable(); }
 }
 function disable() {
@@ -131,9 +131,10 @@ function render() {
   $('last-check').textContent = state.vps?.checkedAt ? `VPS contrôlé à ${time(state.vps.checkedAt)} · suivi automatique` : 'Contrôle du VPS en cours…';
   renderHome(); renderRows(); if (review && step === 3) renderIPChecks(); updateSetupContext(); disable();
 }
+function showAccessError(error) { accessFailed = true; notice(accessErrorMessage(error), true); }
 async function refresh() {
   if (fetching) return; fetching = true;
-  try { state = await api('state'); render(); } finally { fetching = false; }
+  try { state = await api('state'); if (accessFailed) { notice(''); accessFailed = false; lastShownMessage = ''; } render(); } finally { fetching = false; }
 }
 
 function showView(next, focus = true) {
@@ -195,9 +196,8 @@ function updateSetupContext() {
   const count = state.accounts.filter(connectable).length;
   $('pending-number').textContent = count; $('pending-option').hidden = !count;
   $('setup-stock').textContent = `${state.proxies.length} déjà enregistrée${state.proxies.length > 1 ? 's' : ''}`;
-  const prefix = { linkedin: 'li', x: 'x', instagram: 'ig' }[network];
-  const free = state.proxies.filter(p => !p.assigned.some(k => k.startsWith(prefix)) && !p.reservedNetworks?.includes(network)).length;
-  $('setup-capacity').textContent = `${free} place${free > 1 ? 's' : ''} libre${free > 1 ? 's' : ''} pour ${networks[network]} avec les IP actuelles. Une IP peut accueillir un compte de chaque réseau.`;
+  const free = state.proxies.filter(p => p.availableNetworks?.includes(network)).length;
+  $('setup-capacity').textContent = `${free} place${free > 1 ? 's' : ''} libre${free > 1 ? 's' : ''} pour ${networks[network]} avec les IP actuelles. Elles seront attribuées automatiquement ; tu peux laisser le champ IP vide. Une IP peut accueillir un compte de chaque réseau.`;
   if (state.accounts.some(a => a.network === network && a.source && a.identityKnown === false)) $('setup-capacity').textContent += ' Les sessions existantes de ce réseau doivent être identifiées avant de lancer de nouvelles connexions.';
   $('setup-server-status').hidden = !targetMatches();
   $('setup-server-status').textContent = `VPS accessible · ${state.accounts.length} comptes et ${state.proxies.length} IP retrouvés. Tu peux continuer.`;
@@ -253,7 +253,7 @@ function renderReview() {
   $('review-count').textContent = review.accounts.length; $('review-ips').textContent = review.totalIPs;
   $('review-title').textContent = review.accounts.length ? 'Vérifions les IP avant de démarrer.' : 'Aucun compte à connecter.';
   $('review-intro').textContent = review.accounts.length ? 'Chaque IP est testée depuis le VPS. Le lancement sera disponible lorsque tous les contrôles auront réussi.' : 'Consulte les sessions existantes et les affectations à vérifier dans le tableau, ou ajoute des comptes à l’étape précédente.';
-  $('review-note').textContent = `${review.newAccounts} nouveau(x) compte(s) · ${review.newIPs} nouvelle(s) IP · ${review.skipped} compte(s) ignoré(s) : session déjà présente ou affectation à vérifier.`;
+  $('review-note').textContent = `${review.newAccounts} nouveau(x) compte(s) · ${review.reusedIPs} IP existante(s) réutilisée(s) · ${review.newIPs} nouvelle(s) IP · ${review.unusedIPs} IP supplémentaire(s) non ajoutée(s) · ${review.skipped} compte(s) ignoré(s) : session déjà présente ou affectation à vérifier.`;
   const rows = document.createDocumentFragment();
   for (const account of review.accounts) { const tr = element('tr'); tr.append(element('td', account.label), element('td', networks[account.network]), element('td', account.ip)); rows.append(tr); }
   $('review-rows').replaceChildren(rows);
@@ -316,7 +316,7 @@ $('setup-form').addEventListener('submit', event => {
 $('settings-open').addEventListener('click', () => {
   if (state?.connection) { $('host').value = state.connection.host; $('port').value = state.connection.port || ''; $('identity').value = state.connection.identity || ''; }
   const list = document.createDocumentFragment();
-  for (const proxy of state?.proxies || []) list.append(element('p', `${proxy.ip} · ${proxy.assigned.join(', ') || 'Libre pour les trois réseaux'}`, 'hint'));
+  for (const proxy of state?.proxies || []) list.append(element('p', `${proxy.ip} · ${proxy.availableNetworks.length ? 'Disponible pour ' + proxy.availableNetworks.map(n => networks[n]).join(', ') : 'Attribuée sur les trois réseaux'}`, 'hint'));
   $('ip-list').replaceChildren(list); $('settings-dialog').showModal();
 });
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
@@ -339,5 +339,5 @@ document.querySelectorAll('[data-dashboard-network]').forEach(button => button.a
 }));
 ['claude', 'codex'].forEach(provider => $(provider).addEventListener('click', () => act(async () => { const result = await api('install', { provider }); $('assistant-message').textContent = result.message + ' Si nécessaire : ' + result.login; }, 'settings-error')));
 window.addEventListener('pagehide', clearDraft);
-refresh().catch(() => notice('Relance WeeSpy Connect depuis son lanceur pour accéder à cette page.', true));
-setInterval(() => { if (!pending) refresh().catch(() => notice('L’application locale ne répond plus. Relance WeeSpy Connect.', true)); }, 2000);
+refresh().catch(showAccessError);
+setInterval(() => { if (!pending) refresh().catch(showAccessError); }, 2000);

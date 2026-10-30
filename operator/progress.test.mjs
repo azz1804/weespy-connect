@@ -6,7 +6,7 @@ import { cookieEvidence } from './cookie-evidence.mjs';
 import { mergeImport } from './model.mjs';
 const secret = 'SYNTHETIC_PRIVATE_VALUE';
 const empty = () => ({version:1,proxies:[],accounts:[]});
-const data = () => ({proxies:`203.0.113.1:12323:user:${secret} 203.0.113.2:12323:user:${secret}`, accounts:{linkedin:`owner@example.test:${secret}:owner:`}, includePending:false});
+const data = () => ({proxies:`203.0.113.1:12323:user:${secret} 203.0.113.2:12323:user:${secret}`, accounts:{linkedin:`owner@example.test:${secret}:owner: second@example.test:${secret}:second:`}, includePending:false});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function fixture(probeProxy) {
   let reserved = 0, connected = 0;
@@ -16,7 +16,7 @@ async function fixture(probeProxy) {
   const input=data(), preview=operator.previewSetup(input);
   return {operator,remote,request:{...input,previewId:preview.previewId},counts:()=>({reserved,connected})};
 }
-test('draft IP progress follows settled VPS probes, includes unassigned IPs and never reserves secrets', async () => {
+test('draft IP progress follows settled VPS probes, checks only required IPs and never reserves secrets', async () => {
   const calls=[]; const f=await fixture((proxy, signal)=>new Promise((resolve,reject)=>calls.push({proxy,signal,resolve,reject})));
   const {operator,request}=f;
   operator.checkSetupIPs(request);
@@ -32,7 +32,7 @@ test('draft IP progress follows settled VPS probes, includes unassigned IPs and 
   f.remote.probeProxy=async()=>{}; operator.checkSetupIPs(request); await operator.ipCheckJob;
   assert.deepEqual(operator.snapshot().ipChecks.rows.map(r=>r.state),['ok','ok']);
   operator.setupAndConnect(request); await operator.job;
-  assert.deepEqual(f.counts(),{reserved:1,connected:1});
+  assert.deepEqual(f.counts(),{reserved:1,connected:2});
   await operator.close();
 });
 test('cancelled and superseded probes cannot overwrite a newer check or leak credentials', async () => {
@@ -43,7 +43,7 @@ test('cancelled and superseded probes cannot overwrite a newer check or leak cre
   assert.deepEqual(f.operator.snapshot().ipChecks.rows.map(r=>r.state),['checking','queued']);
   f.operator.cancelIPChecks(); calls[1].resolve(); await f.operator.ipCheckJob;
   assert.equal(f.operator.snapshot().ipChecks,null);
-  assert.throws(()=>f.operator.checkSetupIPs({...f.request,proxies:'203.0.113.3:12323:user:changed'}),/configuration/);
+  assert.throws(()=>f.operator.checkSetupIPs({...f.request,proxies:'203.0.113.3:12323:user:changed 203.0.113.4:12323:user:changed'}),/configuration/);
   await f.operator.close();
 });
 test('shared account IP is probed once and only new or selected IPs are checked', async () => {

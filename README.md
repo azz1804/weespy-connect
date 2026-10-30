@@ -14,9 +14,9 @@ Renseigne un accès SSH, par exemple `mon-vps` ou `utilisateur@adresse-du-serveu
 
 ### 2. Colle tes IP et tes comptes
 
-Une ligne par IP, une ligne par compte. Les comptes sont répartis dans les onglets LinkedIn, Instagram et X.
+Colle tes comptes, un par ligne. **Laisse le champ IP vide si des places sont déjà disponibles sur ton VPS.** Les comptes sont répartis dans les onglets LinkedIn, Instagram et X.
 
-WeeSpy propose une association **compte → IP fixe**. Les comptes déjà présents conservent leur affectation. Une IP peut accueillir un compte de chaque réseau, dans la limite de 25 comptes par réseau.
+WeeSpy attribue automatiquement une **IP déjà disponible pour le réseau concerné** à chaque nouveau compte. Si tu fournis des IP supplémentaires, seules celles qui manquent sont ajoutées ; les autres sont indiquées comme non ajoutées dans le récapitulatif. Les comptes déjà présents conservent leur affectation. Une IP peut accueillir un compte de chaque réseau, dans la limite de 25 comptes par réseau.
 
 ### 3. Lance et suis les connexions
 
@@ -60,6 +60,8 @@ npm start
 ```
 
 L’application s’ouvre dans ton navigateur. Renseigne ton VPS dans **Réglages**, puis clique sur **Ajouter des comptes**.
+
+Une fois ce navigateur autorisé, les nouveaux onglets et les redémarrages conservent l’accès au tableau de bord, sans lien spécial.
 
 Les fois suivantes, tu peux double-cliquer sur [`Lancer-WeeSpy-Connect.command`](operator/Lancer-WeeSpy-Connect.command), dans le dossier `operator`.
 
