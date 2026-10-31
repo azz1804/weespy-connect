@@ -435,3 +435,18 @@ test('X temporary login limit ends only that account without retry or waiting',a
  }),error=>error.category==='verification'&&!error.fatal&&/limite temporairement/.test(error.message));
  assert.equal(submitted,0);assert.equal(saved,0);assert.equal(prompted,0);assert.equal(closed,1);
 });
+
+
+test('X waits for delayed profile evidence but still requires confirmation when identity stays unknown',async()=>{
+ for(const identified of [true,false]){
+  let snapshots=0,prompts=0,saves=0;
+  const xrow={...row(),network:'x',key:'x1',label:'synthetic',record:{username:'synthetic',password:secret}};
+  const result=await connectAccount({target:{host:'fake'},row:xrow,signal:abortSignal(),report(){},sleep:async()=>{},stabilityMs:0,
+   open:async()=>({snapshot:async()=>({stage:'outside',identityVerified:identified&&++snapshots>=3}),
+    cookies:async()=>['auth_token','ct0'].map(name=>({name,value:'SYNTHETIC',domain:'.x.com',session:true})),
+    close:async()=>{},submit:async()=>assert.fail('Existing session must not submit credentials')}),
+   waitForUser:async actions=>{prompts++;assert.deepEqual(actions,['confirm','skip']);return 'skip';},
+   save:async()=>{saves++;return {stored:true,scope:'browser_storage'};}});
+  assert.equal(result,identified?'saved':'skipped');assert.equal(prompts,identified?0:1);assert.equal(saves,identified?1:0);
+ }
+});

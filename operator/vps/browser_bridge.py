@@ -49,7 +49,8 @@ async def main():
             browser_ip=await asyncio.to_thread(driver.execute_script,'return document.body.innerText;')
             if len(browser_ip)>4096 or browser_ip.strip()!=data['expected_ip']:
                 print(json.dumps({'error':'ip'}),flush=True);return
-            await asyncio.to_thread(driver.get,data['login'])
+            from session_start import start_login_page
+            await asyncio.to_thread(start_login_page,driver,data['network'],data['login'])
             print(json.dumps({'ready':True,'ipVerified':True}),flush=True)
             while True:
                 line=await asyncio.to_thread(sys.stdin.readline)

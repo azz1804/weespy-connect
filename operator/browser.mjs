@@ -193,7 +193,7 @@ export async function openSession(target, row, signal, report, dependencies = {}
 export async function connectAccount({ target, row, signal, report, waitForUser, save, open, sleep = delay, now = Date.now, stabilityMs = 10_000, timeoutMs = 600_000 }) {
   if (typeof open !== 'function') throw new OperatorError('Un navigateur sur le VPS est requis. Les connexions locales sont désactivées.');
   const session = await open(target, row, signal, report);
-  const attempts = new Set(); let unknown = 0, snapshotErrors = 0, stableSince = null, seenCookies = false;
+  const attempts = new Set(); let unknown = 0, snapshotErrors = 0, identityWaits = 0, stableSince = null, seenCookies = false;
   let totpSubmitted = false, continuationUsed = false, continuationArmed = false, confirmed = false, unsafe = false, closed = false;
   const started = now(); let cycles = 0;
   const problem = (message, category = 'session') => { const e = new OperatorError(message); e.category = category; throw e; };
@@ -213,6 +213,12 @@ export async function connectAccount({ target, row, signal, report, waitForUser,
       if (state.stage === 'outside' && complete) {
         seenCookies = true;
         if (!state.identityVerified && !confirmed) {
+          // X renders its account navigation after the document is loaded.
+          // Wait briefly for that evidence; never infer identity from cookies.
+          if (row.network === 'x' && identityWaits++ < 10) {
+            report('checking', 'Chargement de l’identité du compte X…');
+            await sleep(1000, undefined, { signal }); continue;
+          }
           report('human', 'Vérifie le compte connecté dans Chrome, puis confirme son identité.', { category: 'identity' });
           if (await waitForUser(['confirm', 'skip'], signal) === 'skip') { report('skipped', 'Compte passé'); return 'skipped'; }
           confirmed = true; stableSince = null; continue;

@@ -1,5 +1,7 @@
 # Préparer le VPS une seule fois
 
+Pour X, le navigateur ouvre d’abord l’accueil avec le profil existant. Si les cookies de session sont présents, il reprend cette session sans repasser par le formulaire de connexion. Sinon, il ouvre le formulaire. La présence des cookies ne suffit pas à valider le compte : les contrôles d’identité, de stabilité et de sauvegarde restent obligatoires.
+
 Le tableau de bord tourne sur le Mac. **Firefox, les contrôles Impit, les profils et les cookies tournent sur le VPS.**
 
 Cette préparation s’adresse à la personne qui administre le serveur. Ensuite, l’utilisation quotidienne se fait dans l’interface.
